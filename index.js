@@ -57,7 +57,7 @@ app.get('/api/employees', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const pool = await sql.connect(dbConfig);
         const result = await pool.request()
-            .query('SELECT empId, firstName, lastName, EPF, adminRights FROM Employee');
+            .query('SELECT empId, firstName, lastName, EPF, email, adminRights FROM Employee');
 
         res.json(result.recordset);
     } catch (error) {
@@ -79,7 +79,7 @@ app.get('/api/employees/:id', authenticateToken, async (req, res) => {
         const pool = await sql.connect(dbConfig);
         const result = await pool.request()
             .input('empId', sql.Int, empId)
-            .query('SELECT empId, firstName, lastName, EPF, adminRights FROM Employee WHERE empId = @empId');
+            .query('SELECT empId, firstName, lastName, EPF, email, adminRights FROM Employee WHERE empId = @empId');
 
         if (result.recordset.length === 0) {
             return res.status(404).json({ message: 'Employee not found' });
@@ -92,17 +92,12 @@ app.get('/api/employees/:id', authenticateToken, async (req, res) => {
 });
 
 // Create new employee (Admin only)
-app.post('/api/employees', authenticateToken, async (req, res) => {
+app.post('/api/employees', authenticateToken,requireAdmin, async (req, res) => {
     const { error } = validateEmployee(req.body);
     if (error) return res.status(400).json({ message: error.details[0].message });
 
     try {
-        const { firstName, lastName, EPF, password } = req.body;
-        let { adminRights } = req.body;
-
-        if (!req.user.adminRights) {
-            adminRights = false;
-        }
+        const { firstName, lastName, EPF, email, password,adminRights } = req.body;
 
         const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -111,16 +106,17 @@ app.post('/api/employees', authenticateToken, async (req, res) => {
             .input('firstName', sql.VarChar, firstName)
             .input('lastName', sql.VarChar, lastName)
             .input('EPF', sql.VarChar, EPF)
+            .input('email', sql.VarChar, email)
             .input('passwordHash', sql.VarChar, hashedPassword)
-            .input('adminRights', sql.Bit, adminRights || false)
-            .query(`INSERT INTO Employee (firstName, lastName, EPF, passwordHash, adminRights) 
-                    OUTPUT INSERTED.empId, INSERTED.firstName, INSERTED.lastName, INSERTED.EPF, INSERTED.adminRights
-                    VALUES (@firstName, @lastName, @EPF, @passwordHash, @adminRights)`);
+            .input('adminRights', sql.Bit, adminRights)
+            .query(`INSERT INTO Employee (firstName, lastName, EPF, email, passwordHash, adminRights) 
+                    OUTPUT INSERTED.empId, INSERTED.firstName, INSERTED.lastName, INSERTED.EPF, INSERTED.email, INSERTED.adminRights
+                    VALUES (@firstName, @lastName, @EPF, @email, @passwordHash, @adminRights)`);
 
         res.status(201).json(result.recordset[0]);
     } catch (error) {
         if (error.number === 2627) { // Unique constraint violation
-            return res.status(400).json({ message: 'EPF number already exists' });
+            return res.status(400).json({ message: 'EPF number/email already exists' });
         }
         console.error('Database error:', error);
         res.status(500).json({ message: 'Internal server error' });
@@ -128,19 +124,13 @@ app.post('/api/employees', authenticateToken, async (req, res) => {
 });
 
 // Update employee (Admin only)
-app.put('/api/employees/:id', authenticateToken, async (req, res) => {
+app.put('/api/employees/:id', authenticateToken,requireAdmin, async (req, res) => {
     const { error } = validateEmployeeUpdate(req.body);
     if (error) return res.status(400).json({ message: error.details[0].message });
 
     try {
         const empId = parseInt(req.params.id);
-        const { firstName, lastName, EPF } = req.body;
-
-        let { adminRights } = req.body;
-
-        if (!req.user.adminRights) {
-            adminRights = false;
-        }
+        const { firstName, lastName, EPF, email, adminRights } = req.body;
 
         const pool = await sql.connect(dbConfig);
         const result = await pool.request()
@@ -148,10 +138,11 @@ app.put('/api/employees/:id', authenticateToken, async (req, res) => {
             .input('firstName', sql.VarChar, firstName)
             .input('lastName', sql.VarChar, lastName)
             .input('EPF', sql.VarChar, EPF)
+            .input('email', sql.VarChar, email)
             .input('adminRights', sql.Bit, adminRights)
             .query(`UPDATE Employee 
-                    SET firstName = @firstName, lastName = @lastName, EPF = @EPF, adminRights = @adminRights
-                    OUTPUT INSERTED.empId, INSERTED.firstName, INSERTED.lastName, INSERTED.EPF, INSERTED.adminRights
+                    SET firstName = @firstName, lastName = @lastName, EPF = @EPF, email = @email, adminRights = @adminRights
+                    OUTPUT INSERTED.empId, INSERTED.firstName, INSERTED.lastName, INSERTED.EPF, INSERTED.email, INSERTED.adminRights
                     WHERE empId = @empId`);
 
         if (result.recordset.length === 0) {
@@ -166,14 +157,9 @@ app.put('/api/employees/:id', authenticateToken, async (req, res) => {
 });
 
 // Delete employee (Admin optional)
-app.delete('/api/employees/:id', authenticateToken, async (req, res) => {
+app.delete('/api/employees/:id', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const empId = parseInt(req.params.id);
-
-        // Non-admin users can delete only themselves
-        if (!req.user.adminRights && req.user.empId !== empId) {
-            return res.status(403).json({ message: 'Access denied' });
-        }
 
         const pool = await sql.connect(dbConfig);
         const result = await pool.request()
@@ -303,6 +289,7 @@ function validateEmployee(employee) {
         firstName: Joi.string().min(2).max(100).required(),
         lastName: Joi.string().min(2).max(100).required(),
         EPF: Joi.string().min(3).max(10).required(),
+        email: Joi.string().email().required(),
         password: Joi.string().min(6).required(),
         adminRights: Joi.boolean()
     });
@@ -314,6 +301,7 @@ function validateEmployeeUpdate(employee) {
         firstName: Joi.string().min(2).max(100).required(),
         lastName: Joi.string().min(2).max(100).required(),
         EPF: Joi.string().min(3).max(10).required(),
+        email: Joi.string().email().required(),
         adminRights: Joi.boolean().required()
     });
     return schema.validate(employee);
