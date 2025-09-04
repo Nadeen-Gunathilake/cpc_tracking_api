@@ -180,14 +180,9 @@ app.delete('/api/employees/:id', authenticateToken, requireAdmin, async (req, re
 // Location Management Routes
 
 // Get employee locations (Admin can see all, users can see their own)
-app.get('/api/locations/:empId', authenticateToken, async (req, res) => {
+app.get('/api/locations/:empId', authenticateToken,requireAdmin, async (req, res) => {
     try {
         const empId = parseInt(req.params.empId);
-
-        // Users can only view their own locations unless they're admin
-        if (req.user.empId !== empId && !req.user.adminRights) {
-            return res.status(403).json({ message: 'Access denied' });
-        }
 
         const pool = await sql.connect(dbConfig);
         const result = await pool.request()
