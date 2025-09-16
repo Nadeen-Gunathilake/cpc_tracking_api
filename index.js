@@ -1,11 +1,36 @@
+require('dotenv').config();
 const Joi = require('joi');
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const sql = require('mssql'); // For SQL Server
+const sql = require('mssql');
+const cors = require('cors');
+const { v4: uuidv4 } = require('uuid');
+
+//const sql = require('mssql/msnodesqlv8');
 const app = express();
 
+
+app.use(cors({
+    origin: [
+        'http://localhost:3001',      // React development
+        'http://localhost:3000',      // React alternative port
+        'http://192.168.100.71:3001', // Network access for React
+        'http://127.0.0.1:3001',      // Local network access
+        // Add your production domains here
+    ],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    credentials: true
+}));
+
 app.use(express.json());
+
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+});
+
 
 // Database configuration
 const dbConfig = {
@@ -15,12 +40,33 @@ const dbConfig = {
     database: 'CPC_TRACKING',
     options: {
         encrypt: true, // Use encryption
-        trustServerCertificate: true // For development
+        trustServerCertificate: true, // For development
+        enableArithAbort: true,
+        connectionTimeout: 30000,
+        requestTimeout: 30000,
+    },
+    pool: {
+        max: 10,
+        min: 0,
+        idleTimeoutMillis: 30000
     }
 };
 
+
+/*
+const dbConfig = {
+    server: 'localhost\\SQLExpress',   
+    database: 'CPC_TRACKING',
+    driver: 'msnodesqlv8',
+    options: {
+        trustedConnection: true        
+    }
+};
+*/
+
 // JWT Secret (use environment variable in production)
 const JWT_SECRET = process.env.JWT_SECRET || '84583b13-c3a5-49f8-a4b9-7707fb11a156';
+
 
 // Middleware to verify JWT token
 const authenticateToken = (req, res, next) => {
@@ -74,7 +120,7 @@ app.get('/api/employees/:id', authenticateToken, async (req, res) => {
         // Users can only view their own data unless they're admin
         if (req.user.empId !== empId && !req.user.adminRights) {
             return res.status(403).json({ message: 'Access denied' });
-        } 
+        }
 
         const pool = await sql.connect(dbConfig);
         const result = await pool.request()
@@ -92,12 +138,12 @@ app.get('/api/employees/:id', authenticateToken, async (req, res) => {
 });
 
 // Create new employee (Admin only)
-app.post('/api/employees', authenticateToken,requireAdmin, async (req, res) => {
+app.post('/api/employees', authenticateToken, requireAdmin, async (req, res) => {
     const { error } = validateEmployee(req.body);
     if (error) return res.status(400).json({ message: error.details[0].message });
 
     try {
-        const { firstName, lastName, EPF, email, password,adminRights } = req.body;
+        const { firstName, lastName, EPF, email, password, adminRights } = req.body;
 
         const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -124,7 +170,7 @@ app.post('/api/employees', authenticateToken,requireAdmin, async (req, res) => {
 });
 
 // Update employee (Admin only)
-app.put('/api/employees/:id', authenticateToken,requireAdmin, async (req, res) => {
+app.put('/api/employees/:id', authenticateToken, requireAdmin, async (req, res) => {
     const { error } = validateEmployeeUpdate(req.body);
     if (error) return res.status(400).json({ message: error.details[0].message });
 
@@ -180,7 +226,7 @@ app.delete('/api/employees/:id', authenticateToken, requireAdmin, async (req, re
 // Location Management Routes
 
 // Get employee locations (Admin can see all, users can see their own)
-app.get('/api/locations/:empId', authenticateToken,requireAdmin, async (req, res) => {
+app.get('/api/locations/:empId', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const empId = parseInt(req.params.empId);
 
@@ -225,16 +271,14 @@ app.post('/api/locations', authenticateToken, async (req, res) => {
     }
 });
 
-// Authentication Routes
 
-// Login
+
 app.post('/api/auth/login', async (req, res) => {
     const { error } = validateLogin(req.body);
     if (error) return res.status(400).json({ message: error.details[0].message });
 
     try {
         const { EPF, password } = req.body;
-
         const pool = await sql.connect(dbConfig);
         const result = await pool.request()
             .input('EPF', sql.VarChar, EPF)
@@ -251,16 +295,32 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(401).json({ message: 'Invalid credentials' });
         }
 
+        const sessionId = uuidv4();
+
         const token = jwt.sign(
             {
                 empId: employee.empId,
                 EPF: employee.EPF,
-                adminRights: employee.adminRights
+                adminRights: employee.adminRights,
+                sessionId
             },
             JWT_SECRET,
-            { expiresIn: '24h' }
+            { expiresIn: '12h' }
         );
 
+        const expiresAt = new Date();
+        expiresAt.setHours(expiresAt.getHours() + 12);
+
+
+        await pool.request()
+            .input('sessionId', sql.UniqueIdentifier, sessionId)
+            .input('empId', sql.Int, employee.empId)
+            .input('token', sql.NVarChar, token)
+            .input('expiresAt', sql.DateTime, expiresAt)
+            .query(`INSERT INTO Sessions (sessionId, empId, token, expiresAt)
+                    VALUES (@sessionId, @empId, @token, @expiresAt)`);
+
+        // Send token and employee info
         res.json({
             token,
             employee: {
@@ -268,11 +328,29 @@ app.post('/api/auth/login', async (req, res) => {
                 firstName: employee.firstName,
                 lastName: employee.lastName,
                 EPF: employee.EPF,
+                email: employee.email,
                 adminRights: employee.adminRights
             }
         });
+
     } catch (error) {
         console.error('Database error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+    try {
+        const sessionId = req.user.sessionId;
+
+        const pool = await sql.connect(dbConfig);
+        await pool.request()
+            .input('sessionId', sql.UniqueIdentifier, sessionId)
+            .query('DELETE FROM Sessions WHERE sessionId = @sessionId');
+
+        res.json({ message: 'Logged out successfully' });
+    } catch (error) {
+        console.error('Logout error:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 });
