@@ -12,8 +12,10 @@ const config = {
   db: {
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
-    server: process.env.DB_HOST,
-    database: process.env.DB_NAME || 'CPC_TRACKING',
+    // Support both DB_HOST and legacy DB_SERVER
+    server: process.env.DB_HOST || process.env.DB_SERVER,
+    // Support both DB_NAME and legacy DB_DATABASE
+    database: process.env.DB_NAME || process.env.DB_DATABASE || 'CPC_TRACKING',
     options: {
       encrypt: process.env.DB_ENCRYPT === 'true',
       trustServerCertificate: process.env.DB_TRUST_SERVER_CERT === 'true',
@@ -28,7 +30,8 @@ const config = {
     expiresIn: '12h'
   },
   security: {
-    bcryptRounds: parseInt(process.env.BCRYPT_SALT_ROUNDS || '10', 10)
+    // Accept either BCRYPT_SALT_ROUNDS or BCRYPT_ROUNDS
+    bcryptRounds: parseInt(process.env.BCRYPT_SALT_ROUNDS || process.env.BCRYPT_ROUNDS || '10', 10)
   },
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10), // 15 min default

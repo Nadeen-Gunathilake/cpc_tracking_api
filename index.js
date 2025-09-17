@@ -127,28 +127,33 @@ app.post('/api/employees', authenticateToken, requireAdmin, async (req, res) => 
     if (error) return res.status(400).json({ message: error.details[0].message });
 
     try {
-        const { firstName, lastName, EPF, email, password, adminRights } = req.body;
+    const { firstName, lastName, EPF, email, password, adminRights } = req.body;
+        const isAdmin = adminRights === true;
+        const hashedPassword = await bcrypt.hash(password, config.security.bcryptRounds);
 
-    const hashedPassword = await bcrypt.hash(password, config.security.bcryptRounds);
-
-    const pool = await getPool();
-        const result = await pool.request()
-            .input('firstName', sql.VarChar, firstName)
-            .input('lastName', sql.VarChar, lastName)
-            .input('EPF', sql.VarChar, EPF)
-            .input('email', sql.VarChar, email)
-            .input('passwordHash', sql.VarChar, hashedPassword)
-            .input('adminRights', sql.Bit, adminRights)
-            .query(`INSERT INTO Employee (firstName, lastName, EPF, email, passwordHash, adminRights) 
-                    OUTPUT INSERTED.empId, INSERTED.firstName, INSERTED.lastName, INSERTED.EPF, INSERTED.email, INSERTED.adminRights
-                    VALUES (@firstName, @lastName, @EPF, @email, @passwordHash, @adminRights)`);
-
+        const pool = await getPool();
+        let result;
+        try {
+            result = await pool.request()
+                .input('firstName', sql.VarChar, firstName)
+                .input('lastName', sql.VarChar, lastName)
+                .input('EPF', sql.VarChar, EPF)
+                .input('email', sql.VarChar, email)
+                .input('passwordHash', sql.VarChar, hashedPassword)
+                .input('adminRights', sql.Bit, isAdmin)
+                .query(`INSERT INTO Employee (firstName, lastName, EPF, email, passwordHash, adminRights)
+                        OUTPUT INSERTED.empId, INSERTED.firstName, INSERTED.lastName, INSERTED.EPF, INSERTED.email, INSERTED.adminRights
+                        VALUES (@firstName, @lastName, @EPF, @email, @passwordHash, @adminRights)`);
+        } catch (innerErr) {
+            throw innerErr;
+        }
         res.status(201).json(result.recordset[0]);
     } catch (error) {
-        if (error.number === 2627) { // Unique constraint violation
+        if (error.number === 2627) {
             return res.status(400).json({ message: 'EPF number/email already exists' });
         }
-        console.error('Database error:', error);
+        // 515 = Cannot insert the value NULL into column (NOT NULL constraint)
+        logger.error({ err: error }, 'Create employee failed');
         res.status(500).json({ message: 'Internal server error' });
     }
 });
@@ -160,20 +165,26 @@ app.put('/api/employees/:id', authenticateToken, requireAdmin, async (req, res) 
 
     try {
         const empId = parseInt(req.params.id);
-        const { firstName, lastName, EPF, email, adminRights } = req.body;
+    const { firstName, lastName, EPF, email, adminRights } = req.body;
+        const isAdmin = adminRights === true;
 
-    const pool = await getPool();
-        const result = await pool.request()
-            .input('empId', sql.Int, empId)
-            .input('firstName', sql.VarChar, firstName)
-            .input('lastName', sql.VarChar, lastName)
-            .input('EPF', sql.VarChar, EPF)
-            .input('email', sql.VarChar, email)
-            .input('adminRights', sql.Bit, adminRights)
-            .query(`UPDATE Employee 
-                    SET firstName = @firstName, lastName = @lastName, EPF = @EPF, email = @email, adminRights = @adminRights
-                    OUTPUT INSERTED.empId, INSERTED.firstName, INSERTED.lastName, INSERTED.EPF, INSERTED.email, INSERTED.adminRights
-                    WHERE empId = @empId`);
+        const pool = await getPool();
+        let result;
+        try {
+            result = await pool.request()
+                .input('empId', sql.Int, empId)
+                .input('firstName', sql.VarChar, firstName)
+                .input('lastName', sql.VarChar, lastName)
+                .input('EPF', sql.VarChar, EPF)
+                .input('email', sql.VarChar, email)
+                .input('adminRights', sql.Bit, isAdmin)
+                .query(`UPDATE Employee 
+                        SET firstName = @firstName, lastName = @lastName, EPF = @EPF, email = @email, adminRights = @adminRights
+                        OUTPUT INSERTED.empId, INSERTED.firstName, INSERTED.lastName, INSERTED.EPF, INSERTED.email, INSERTED.adminRights
+                        WHERE empId = @empId`);
+        } catch (innerErr) {
+            throw innerErr;
+        }
 
         if (result.recordset.length === 0) {
             return res.status(404).json({ message: 'Employee not found' });
@@ -181,7 +192,7 @@ app.put('/api/employees/:id', authenticateToken, requireAdmin, async (req, res) 
 
         res.json(result.recordset[0]);
     } catch (error) {
-        console.error('Database error:', error);
+        logger.error({ err: error }, 'Update employee failed');
         res.status(500).json({ message: 'Internal server error' });
     }
 });
@@ -265,7 +276,7 @@ app.get('/api/locations/search', authenticateToken, async (req, res) => {
         // Find employee by EPF (case sensitive as stored; adjust with UPPER if needed)
         const empResult = await pool.request()
             .input('EPF', sql.VarChar, epf)
-            .query('SELECT empId, firstName, lastName, EPF, email, adminRights FROM Employee WHERE EPF = @EPF');
+            .query('SELECT empId, firstName, lastName, EPF, email, adminRights, phoneNumber FROM Employee WHERE EPF = @EPF');
         if (empResult.recordset.length === 0) {
             return res.status(404).json({ message: 'Employee not found' });
         }
@@ -346,7 +357,8 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
                 lastName: employee.lastName,
                 EPF: employee.EPF,
                 email: employee.email,
-                adminRights: employee.adminRights
+                adminRights: employee.adminRights,
+                phoneNumber: employee.phoneNumber || null
             }
         });
 
@@ -390,7 +402,7 @@ app.get('/api/auth/validate', authenticateToken, async (req, res) => {
         // Fetch latest employee details
         const empResult = await pool.request()
             .input('empId', sql.Int, req.user.empId)
-            .query('SELECT empId, firstName, lastName, EPF, email, adminRights FROM Employee WHERE empId = @empId');
+            .query('SELECT empId, firstName, lastName, EPF, email, adminRights, phoneNumber FROM Employee WHERE empId = @empId');
         if (empResult.recordset.length === 0) {
             return res.status(404).json({ valid: false, message: 'User not found' });
         }
