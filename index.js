@@ -18,14 +18,29 @@ const { loginSchema } = require('./src/schemas/auth');
 
 const app = express();
 
+// CORS configuration: allow configured origins + common local dev ports (3000,3001,5173)
+const defaultOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:5173', // Vite default
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+    'http://127.0.0.1:5173',
+    'http://192.168.100.71:3000',
+    'http://192.168.100.71:3001',
+    'http://192.168.100.71:5173'
+];
+const extraOriginsEnv = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map(o => o.trim()).filter(Boolean) : [];
+const allowedOrigins = Array.from(new Set([...defaultOrigins, ...extraOriginsEnv]));
 
 app.use(cors({
-    origin: [
-        'http://localhost:3001',
-        'http://localhost:3000',
-        'http://192.168.100.71:3001',
-        'http://127.0.0.1:3001'
-    ],
+    origin: function (origin, callback) {
+        // Allow non-browser requests (no origin) and those explicitly whitelisted
+        if (!origin || allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+        return callback(new Error('Not allowed by CORS: ' + origin));
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     credentials: true
@@ -239,6 +254,40 @@ app.post('/api/locations', authenticateToken, async (req, res) => {
 });
 
 
+// Search locations by employee EPF (admin) or own EPF if not admin
+app.get('/api/locations/search', authenticateToken, async (req, res) => {
+    const { epf } = req.query;
+    if (!epf || epf.trim().length === 0) {
+        return res.status(400).json({ message: 'Query parameter "epf" is required' });
+    }
+    try {
+        const pool = await getPool();
+        // Find employee by EPF (case sensitive as stored; adjust with UPPER if needed)
+        const empResult = await pool.request()
+            .input('EPF', sql.VarChar, epf)
+            .query('SELECT empId, firstName, lastName, EPF, email, adminRights FROM Employee WHERE EPF = @EPF');
+        if (empResult.recordset.length === 0) {
+            return res.status(404).json({ message: 'Employee not found' });
+        }
+        const targetEmployee = empResult.recordset[0];
+
+        // Authorization: Non-admins can only search themselves
+        if (!req.user.adminRights && req.user.empId !== targetEmployee.empId) {
+            return res.status(403).json({ message: 'Access denied' });
+        }
+
+        const locationResult = await pool.request()
+            .input('empId', sql.Int, targetEmployee.empId)
+            .query('SELECT * FROM Location WHERE empId = @empId ORDER BY timestamp DESC');
+
+        res.json({ employee: targetEmployee, locations: locationResult.recordset });
+    } catch (error) {
+        console.error('Location search error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+
 
 const loginLimiter = rateLimit({ windowMs: config.rateLimit.windowMs, max: config.rateLimit.max });
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
@@ -320,6 +369,39 @@ app.post('/api/auth/logout', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Logout error:', error);
         res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// Validate current auth token & session
+app.get('/api/auth/validate', authenticateToken, async (req, res) => {
+    try {
+        const pool = await getPool();
+        // Check session still exists
+        const sessionResult = await pool.request()
+            .input('sessionId', sql.UniqueIdentifier, req.user.sessionId)
+            .query('SELECT sessionId, expiresAt FROM Sessions WHERE sessionId = @sessionId');
+        if (sessionResult.recordset.length === 0) {
+            return res.status(401).json({ valid: false, message: 'Session not found' });
+        }
+        const session = sessionResult.recordset[0];
+        if (new Date(session.expiresAt) < new Date()) {
+            return res.status(401).json({ valid: false, message: 'Session expired' });
+        }
+        // Fetch latest employee details
+        const empResult = await pool.request()
+            .input('empId', sql.Int, req.user.empId)
+            .query('SELECT empId, firstName, lastName, EPF, email, adminRights FROM Employee WHERE empId = @empId');
+        if (empResult.recordset.length === 0) {
+            return res.status(404).json({ valid: false, message: 'User not found' });
+        }
+        res.json({
+            valid: true,
+            user: empResult.recordset[0],
+            session: { sessionId: session.sessionId, expiresAt: session.expiresAt }
+        });
+    } catch (error) {
+        console.error('Validate error:', error);
+        res.status(500).json({ valid: false, message: 'Internal server error' });
     }
 });
 
