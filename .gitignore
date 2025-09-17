@@ -7,7 +7,7 @@ yarn.lock
 pnpm-lock.yaml
 
 # Logs
-logs
+logs/
 *.log
 logs/*.log
 pids
@@ -26,6 +26,7 @@ coverage/
 .env
 .env.local
 .env.*.local
+.env.test
 
 # OS-specific
 .DS_Store
