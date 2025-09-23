@@ -218,15 +218,15 @@ app.delete('/api/employees/:id', authenticateToken, requireAdmin, async (req, re
 });
 
 // Location Management Routes
-
 // Get employee locations (Admin can see all, users can see their own)
+
 app.get('/api/locations/:empId', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const empId = parseInt(req.params.empId);
         const pool = await getPool();
         const result = await pool.request()
             .input('empId', sql.Int, empId)
-            .query('SELECT * FROM Location WHERE empId = @empId ORDER BY timestamp DESC');
+            .query('SELECT * FROM Location WHERE empId = @empId ORDER BY timestamp ASC');
 
         res.json(result.recordset);
     } catch (error) {
@@ -239,7 +239,7 @@ app.get('/api/locations', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const pool = await getPool();
         const result = await pool.request()
-            .query('SELECT locationId, empId, latitude, longitude, timestamp FROM Location');
+            .query('SELECT EPF, firstName, lastName, latitude, longitude, timestamp FROM Location L JOIN Employee E ON L.empId = E.empId ORDER BY timestamp ASC');
 
         res.json(result.recordset);
     } catch (error) {
@@ -276,43 +276,6 @@ app.post('/api/locations', authenticateToken, async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 });
-
-
-// Search locations by employee EPF (admin) or own EPF if not admin
-app.get('/api/locations/search', authenticateToken, async (req, res) => {
-    const { epf } = req.query;
-    if (!epf || epf.trim().length === 0) {
-        return res.status(400).json({ message: 'Query parameter "epf" is required' });
-    }
-    try {
-        const pool = await getPool();
-        // Find employee by EPF
-        const empResult = await pool.request()
-            .input('EPF', sql.VarChar, epf)
-            .query('SELECT empId, firstName, lastName, EPF, email, adminRights FROM Employee WHERE EPF = @EPF');
-        
-        if (empResult.recordset.length === 0) {
-            return res.status(404).json({ message: 'Employee not found' });
-        }
-        const targetEmployee = empResult.recordset[0];
-
-        // Authorization: Non-admins can only search themselves
-        if (!req.user.adminRights && req.user.empId !== targetEmployee.empId) {
-            return res.status(403).json({ message: 'Access denied' });
-        }
-
-        // Get locations in chronological order (ASC) for proper polyline drawing
-        const locationResult = await pool.request()
-            .input('empId', sql.Int, targetEmployee.empId)
-            .query('SELECT * FROM Location WHERE empId = @empId ORDER BY timestamp ASC');
-
-        res.json({ employee: targetEmployee, locations: locationResult.recordset });
-    } catch (error) {
-        console.error('Location search error:', error);
-        res.status(500).json({ message: 'Internal server error' });
-    }
-});
-
 
 const loginLimiter = rateLimit({ windowMs: config.rateLimit.windowMs, max: config.rateLimit.max });
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
