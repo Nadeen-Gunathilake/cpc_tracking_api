@@ -273,10 +273,11 @@ app.get('/api/locations/search', authenticateToken, async (req, res) => {
     }
     try {
         const pool = await getPool();
-        // Find employee by EPF (case sensitive as stored; adjust with UPPER if needed)
+        // Find employee by EPF
         const empResult = await pool.request()
             .input('EPF', sql.VarChar, epf)
-            .query('SELECT empId, firstName, lastName, EPF, email, adminRights, phoneNumber FROM Employee WHERE EPF = @EPF');
+            .query('SELECT empId, firstName, lastName, EPF, email, adminRights FROM Employee WHERE EPF = @EPF');
+        
         if (empResult.recordset.length === 0) {
             return res.status(404).json({ message: 'Employee not found' });
         }
@@ -287,9 +288,10 @@ app.get('/api/locations/search', authenticateToken, async (req, res) => {
             return res.status(403).json({ message: 'Access denied' });
         }
 
+        // Get locations in chronological order (ASC) for proper polyline drawing
         const locationResult = await pool.request()
             .input('empId', sql.Int, targetEmployee.empId)
-            .query('SELECT * FROM Location WHERE empId = @empId ORDER BY timestamp DESC');
+            .query('SELECT * FROM Location WHERE empId = @empId ORDER BY timestamp ASC');
 
         res.json({ employee: targetEmployee, locations: locationResult.recordset });
     } catch (error) {
@@ -297,7 +299,6 @@ app.get('/api/locations/search', authenticateToken, async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 });
-
 
 
 const loginLimiter = rateLimit({ windowMs: config.rateLimit.windowMs, max: config.rateLimit.max });
