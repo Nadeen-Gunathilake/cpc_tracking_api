@@ -235,6 +235,19 @@ app.get('/api/locations/:empId', authenticateToken, requireAdmin, async (req, re
     }
 });
 
+app.get('/api/locations', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const pool = await getPool();
+        const result = await pool.request()
+            .query('SELECT locationId, empId, latitude, longitude, timestamp FROM Location');
+
+        res.json(result.recordset);
+    } catch (error) {
+        console.error('Database error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
 // Add location tracking
 app.post('/api/locations', authenticateToken, async (req, res) => {
     const { error } = locationSchema.validate(req.body);
