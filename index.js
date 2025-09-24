@@ -51,24 +51,6 @@ app.disable('x-powered-by');
 app.use(express.json());
 app.use(requestLogger);
 
-// Rate limiting only for auth endpoints (applied later via middleware style inline)
-
-// Maintain original APIs without path changes
-
-
-// Using externalized DB config via config module & pool helper
-
-
-/*
-const dbConfig = {
-    server: 'localhost\\SQLExpress',   
-    database: 'CPC_TRACKING',
-    driver: 'msnodesqlv8',
-    options: {
-        trustedConnection: true        
-    }
-};
-*/
 
 // JWT secret sourced from config
 const JWT_SECRET = config.jwt.secret;
