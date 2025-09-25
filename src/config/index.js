@@ -8,7 +8,7 @@ function requireEnv(name) {
 
 const config = {
   env: process.env.NODE_ENV || 'development',
-  port: parseInt(process.env.PORT, 10) || 3000,
+  port: parseInt(process.env.PORT, 10) || 80,
   db: {
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
