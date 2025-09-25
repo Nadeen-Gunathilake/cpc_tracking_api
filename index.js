@@ -16,6 +16,8 @@ const { createEmployeeSchema, updateEmployeeSchema } = require('./src/schemas/em
 const { locationSchema } = require('./src/schemas/location');
 const { loginSchema } = require('./src/schemas/auth');
 
+const os = require("os"); 
+
 const app = express();
 
 // CORS configuration: allow configured origins + common local dev ports (3000,3001,5173)
@@ -381,8 +383,29 @@ app.get('/api/auth/validate', authenticateToken, async (req, res) => {
 
 app.use(errorHandler);
 
-const port = config.port;
-app.listen(port, '0.0.0.0', () => logger.info(`CPC Tracking API running on port ${port}...`));
+/*const port = config.port;
+app.listen(port, '0.0.0.0', () => logger.info(`CPC Tracking API running on port ${port}...`));*/
+
+const port = config.port || 3000;
+const server = app.listen(port, "0.0.0.0", () => {
+  const { port } = server.address();
+
+  // Get LAN IP
+  const nets = os.networkInterfaces();
+  let lanIp = "localhost";
+
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === "IPv4" && !net.internal) {
+        lanIp = net.address; // e.g., 192.168.1.42
+      }
+    }
+  }
+
+  logger.info(`CPC Tracking API running at:`);
+  logger.info(`- Local:   http://localhost:${port}`);
+  logger.info(`- Network: http://${lanIp}:${port}`);
+});
 
 
 
